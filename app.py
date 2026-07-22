@@ -48,9 +48,10 @@ def load_current_season(api_key: str, code: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner="Enriquecendo com histórico de temporadas anteriores...")
-def load_training_data(api_key: str, code: str) -> tuple[pd.DataFrame, dict]:
+def load_training_data(api_key: str, code: str,
+                       fixture_names: tuple[str, ...] = ()) -> tuple[pd.DataFrame, dict]:
     current = load_current_season(api_key, code)
-    return build_training_data(code, current)
+    return build_training_data(code, current, extra_live_names=fixture_names)
 
 
 MODEL_CLASSES = {
@@ -60,8 +61,9 @@ MODEL_CLASSES = {
 
 
 @st.cache_resource(show_spinner="Treinando modelo...")
-def train_model(api_key: str, code: str, half_life: float, model_name: str):
-    combined, _ = load_training_data(api_key, code)
+def train_model(api_key: str, code: str, half_life: float, model_name: str,
+                fixture_names: tuple[str, ...] = ()):
+    combined, _ = load_training_data(api_key, code, fixture_names)
     cls = MODEL_CLASSES[model_name]
     return cls(half_life_days=half_life).fit(combined)
 
@@ -169,7 +171,10 @@ with st.sidebar:
 # ---- carrega jogos e histórico (temporada atual + enriquecimento externo)
 try:
     fixtures = load_fixtures(api_key, code, n_rounds)
-    training_data, hist_info = load_training_data(api_key, code)
+    fixture_names = tuple(sorted(
+        set(fixtures["home_team"]) | set(fixtures["away_team"])
+    )) if not fixtures.empty else ()
+    training_data, hist_info = load_training_data(api_key, code, fixture_names)
 except Exception as e:
     st.error(f"Erro ao consultar a API: {e}")
     st.stop()
@@ -290,7 +295,7 @@ with ca:
     st.markdown(f"**{away}**")
 
 try:
-    model = train_model(api_key, code, half_life, model_name)
+    model = train_model(api_key, code, half_life, model_name, fixture_names)
     pred = model.predict(home, away)
 except ValueError as e:
     st.warning(

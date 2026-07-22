@@ -47,8 +47,9 @@ FOOTBALLDATA_UK_CODES = {
 
 _NOISE_TOKENS = {
     "fc", "ec", "sc", "ac", "cr", "se", "rb", "ca", "cd", "cfc", "afc", "fr",
+    "cf", "rcd", "1", "04", "05", "1899", "1900",
     "clube", "club", "futebol", "esporte", "esportivo", "futbol",
-    "sporting", "do", "de", "da", "dos", "das",
+    "sporting", "do", "de", "da", "dos", "das", "e", "and",
 }
 
 
@@ -58,50 +59,77 @@ def _strip_accents(s: str) -> str:
     )
 
 
-# Times conhecidos cujo nome abreviado por estado (ex.: "-PR", "-MG")
-# não bate por interseção de tokens com o nome completo usado por outras
-# fontes. Curado manualmente (não é fuzzy), então é seguro: só adiciona
-# tokens extras de apoio para os casos mais comuns do futebol brasileiro.
+# Apelidos curados manualmente (nao e fuzzy, entao e seguro): adiciona
+# tokens de apoio para abreviacoes que o casamento por prefixo nao alcanca.
+# Chave = tokens normalizados e ordenados do nome na fonte historica.
 _KNOWN_ALIASES = {
+    # Brasil (football-data.co.uk usa sufixo de estado)
     "athletico pr": {"paranaense"},
     "atletico pr": {"paranaense"},
     "atletico mg": {"mineiro"},
     "atletico go": {"goianiense"},
+    # Inglaterra
+    "forest nott'm": {"nottingham"},
+    "nott'm forest": {"nottingham"},
+    "sheffield weds": {"wednesday"},
+    "qpr": {"queens", "park", "rangers"},
+    "wolves": {"wolverhampton", "wanderers"},
+    # Alemanha (chave preserva o apostrofo, que so e removido depois do alias)
+    "bayern munich": {"munchen"},
+    "m'gladbach": {"borussia", "monchengladbach"},
+    "ein frankfurt": {"eintracht"},
+    # Espanha
+    "ath madrid": {"atletico"},
+    "ath bilbao": {"athletic"},
+    "espanol": {"espanyol", "barcelona"},
 }
 
 
 def _tokens(name: str) -> set[str]:
     """Conjunto de tokens significativos de um nome de time (sem sufixos
-    genéricos de entidade). Usado para o casamento por interseção de
-    tokens, que é bem mais seguro que similaridade de caracteres bruta
-    (ex.: "Corinthians" x "Coritiba" têm caracteres parecidos mas são
-    times completamente diferentes - comparar por token evita esse erro)."""
-    s = _strip_accents(str(name)).lower().replace("-", " ").replace(".", " ")
+    genericos de entidade). Comparacao por token e bem mais segura que
+    similaridade de caracteres bruta (ex.: "Corinthians" x "Coritiba" tem
+    caracteres parecidos mas sao times completamente diferentes)."""
+    s = _strip_accents(str(name)).lower()
+    s = s.replace("-", " ").replace(".", " ")
     toks = {t for t in s.split() if t not in _NOISE_TOKENS}
     key = " ".join(sorted(toks))
     toks |= _KNOWN_ALIASES.get(key, set())
-    return toks
+    # depois de aplicar aliases (cuja chave preserva apostrofo), remove-os
+    return {t.replace("'", "") for t in toks}
 
 
 def normalize_key(name: str) -> str:
     return " ".join(sorted(_tokens(name)))
 
 
+def _tok_match(a: str, b: str) -> bool:
+    """Tokens 'iguais' se identicos ou se um e prefixo do outro (>=3 letras).
+    Cobre abreviacoes como 'Man'~'Manchester', 'Ein'~'Eintracht', sem cair
+    na armadilha Corinthians~Coritiba (nenhum e prefixo do outro)."""
+    if a == b:
+        return True
+    if len(a) >= 3 and b.startswith(a):
+        return True
+    if len(b) >= 3 and a.startswith(b):
+        return True
+    return False
+
+
 def reconcile_names(
-    source_names: list[str], live_names: list[str], min_jaccard: float = 0.5
+    source_names: list[str], live_names: list[str], min_score: float = 0.6
 ) -> dict[str, str]:
     """
     Para cada nome em source_names, encontra o melhor correspondente em
-    live_names por interseção de tokens (índice de Jaccard >= min_jaccard).
-    Times sem correspondência confiável ficam de fora do dict (o
-    chamador mantém o nome original nesse caso) - preferimos um "não
-    encontrado" a uma fusão errada de dois times diferentes.
+    live_names. Pontuacao = coeficiente de sobreposicao (tokens casados /
+    tamanho do menor conjunto), com casamento por prefixo entre tokens.
+    O coeficiente de sobreposicao (em vez de Jaccard) permite que nomes
+    curtos como "Sociedad" casem com "Real Sociedad de Futbol" - no
+    Jaccard, os tokens extras do nome longo diluiriam o score.
 
-    Nota: nomes fortemente abreviados por sufixo de estado (ex.:
-    "Athletico-PR", "Atlético-GO") podem não bater com o nome completo
-    da fonte ao vivo por interseção de tokens; nesses casos o time
-    permanece não reconciliado, o que é seguro (só reduz o histórico
-    direto daquele time), nunca produz uma fusão incorreta.
+    Times sem correspondencia confiavel ficam de fora do dict (o chamador
+    mantem o nome original): preferimos "nao encontrado" a fundir dois
+    times diferentes.
     """
     live_tokens = {n: _tokens(n) for n in live_names}
 
@@ -114,14 +142,13 @@ def reconcile_names(
         for live_name, ltok in live_tokens.items():
             if not ltok:
                 continue
-            inter = src_tok & ltok
-            if not inter:
+            matched = sum(1 for t in src_tok if any(_tok_match(t, l) for l in ltok))
+            if matched == 0:
                 continue
-            union = src_tok | ltok
-            jaccard = len(inter) / len(union)
-            if jaccard > best_score:
-                best_score, best_name = jaccard, live_name
-        if best_name and best_score >= min_jaccard:
+            score = matched / min(len(src_tok), len(ltok))
+            if score > best_score:
+                best_score, best_name = score, live_name
+        if best_name and best_score >= min_score:
             mapping[src] = best_name
     return mapping
 
@@ -234,18 +261,28 @@ def build_training_data(
     competition_code: str,
     current_season_matches: pd.DataFrame,
     min_year: int = 2018,
+    extra_live_names: list[str] | tuple[str, ...] = (),
 ) -> tuple[pd.DataFrame, dict]:
     """
     Combina o histórico externo (se disponível para a competição) com os
     jogos já disputados na temporada atual, reconciliando nomes de times.
 
+    extra_live_names: nomes de times vindos dos JOGOS FUTUROS (fixtures).
+    Essencial entre temporadas / no início delas: sem nenhum jogo
+    finalizado, seriam esses os únicos nomes "oficiais" da API para
+    ancorar a reconciliação — sem eles, o histórico ficaria com nomes
+    de outra grafia e todo time seria "desconhecido" na previsão.
+
     Retorna (dataframe_combinado, info) onde info traz estatísticas úteis
     para exibir na interface (nº de jogos históricos, times não
     reconciliados etc.).
     """
-    live_names = sorted(
-        set(current_season_matches["home_team"]) | set(current_season_matches["away_team"])
-    ) if not current_season_matches.empty else []
+    live_names = set(extra_live_names)
+    if not current_season_matches.empty:
+        live_names |= set(current_season_matches["home_team"]) | set(
+            current_season_matches["away_team"]
+        )
+    live_names = sorted(live_names)
 
     info = {"historical_matches": 0, "source": None, "unmatched_teams": []}
 
