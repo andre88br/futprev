@@ -170,6 +170,25 @@ def _find_closing_odds(odds_data: pd.DataFrame, home: str, away: str,
             "2": float(r["odds_away"])}
 
 
+def _find_ou_odds(odds_data: pd.DataFrame, home: str, away: str,
+                  date, tolerance_days: int = 3):
+    """Odds de fechamento over/under 2.5 do jogo, se existirem."""
+    if odds_data is None or "odds_over25" not in odds_data.columns:
+        return None
+    cand = odds_data[
+        (odds_data["home_team"] == home) & (odds_data["away_team"] == away)
+    ].dropna(subset=["odds_over25", "odds_under25"])
+    if cand.empty:
+        return None
+    d = pd.to_datetime(date)
+    diffs = (pd.to_datetime(cand["date"]) - d).abs()
+    best = diffs.idxmin()
+    if diffs.loc[best].days > tolerance_days:
+        return None
+    r = cand.loc[best]
+    return {"over": float(r["odds_over25"]), "under": float(r["odds_under25"])}
+
+
 def walk_forward_recent(
     training_data: pd.DataFrame,
     current_season: pd.DataFrame,
@@ -221,6 +240,17 @@ def walk_forward_recent(
             # aposta ficticia de 1 unidade no palpite, paga a odd real de
             # fechamento (COM a margem da casa — é o que se receberia de fato)
             profit = (odd_pick - 1.0 if hit else -1.0) if odd_pick else None
+
+            # --- mercado over/under 2.5 gols ---
+            total_goals = hg + ag
+            ou_actual = "over" if total_goals >= 3 else "under"
+            p_over = pred["prob_over_2_5"]
+            ou_pick = "over" if p_over >= 0.5 else "under"
+            ou_hit = ou_pick == ou_actual
+            ou_odds = _find_ou_odds(training_data, r["home_team"],
+                                    r["away_team"], r["date"])
+            ou_odd_pick = ou_odds[ou_pick] if ou_odds else None
+            ou_profit = (ou_odd_pick - 1.0 if ou_hit else -1.0) if ou_odd_pick else None
             rows.append({
                 "matchday": int(md),
                 "date": r["date"],
@@ -232,9 +262,17 @@ def walk_forward_recent(
                 "actual": actual,
                 "hit_1x2": hit,
                 "hit_exact_score": (mi, mj) == (hg, ag),
+                "score_prob": float(pred["top_scorelines"][0][1])
+                              if pred["top_scorelines"] else None,
                 "brier": float(np.sum((p_vec - onehot) ** 2)),
                 "odd_pick": odd_pick,
                 "profit": profit,
+                "ou_pick": ou_pick,
+                "ou_actual": ou_actual,
+                "ou_hit": ou_hit,
+                "prob_over25": p_over,
+                "ou_odd_pick": ou_odd_pick,
+                "ou_profit": ou_profit,
             })
     return pd.DataFrame(rows)
 

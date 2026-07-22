@@ -436,6 +436,63 @@ with tab_perf:
                     "(a fonte de odds pode ainda não ter atualizado as "
                     "rodadas mais recentes)."
                 )
+
+            # ---- simulação de banca: over/under 2.5 gols ----
+            ou_bets = perf.dropna(subset=["ou_profit"]) if "ou_profit" in perf else pd.DataFrame()
+            if len(ou_bets) >= 5:
+                st.markdown("**💰 Simulação de banca — Over/Under 2.5 gols** "
+                            "(1 unidade no lado que o modelo prevê)")
+                ou_total = ou_bets["ou_profit"].sum()
+                ou_roi = ou_total / len(ou_bets)
+                ou_acc = ou_bets["ou_hit"].mean()
+                o1, o2, o3, o4 = st.columns(4)
+                o1.metric("Apostas", len(ou_bets))
+                o2.metric("Acerto O/U", pct(ou_acc))
+                o3.metric("Lucro total", f"{ou_total:+.2f} un")
+                o4.metric("ROI", f"{100 * ou_roi:+.1f}%")
+                st.caption(
+                    "Mesmo mercado que o backtest de placar não cobria — aqui as "
+                    "odds over/under 2.5 são reais (football-data.co.uk). O modelo "
+                    "prevê o total de gols, então este é um teste direto dessa "
+                    "capacidade. Mesma ressalva de amostra pequena se aplica."
+                )
+
+            # ---- viabilidade do placar exato (sem odds reais de placar na
+            # fonte de dados; análise honesta possível: acerto observado vs
+            # odd de equilíbrio necessária)
+            sp = perf.dropna(subset=["score_prob"])
+            if len(sp) >= 5:
+                st.markdown("**🎯 Placar exato — análise de viabilidade**")
+                hit_rate = sp["hit_exact_score"].mean()
+                mean_p = sp["score_prob"].mean()
+                s1, s2, s3 = st.columns(3)
+                s1.metric("Acerto observado", pct(hit_rate))
+                s2.metric("Previsto pelo modelo", pct(mean_p),
+                          help="Média das probabilidades que o modelo deu aos "
+                               "placares que apostou. Se ≈ acerto observado, "
+                               "o modelo está bem calibrado nos placares.")
+                s3.metric(
+                    "Odd de equilíbrio",
+                    f"{1 / hit_rate:.1f}" if hit_rate > 0 else "—",
+                    help="Odd média mínima para empatar apostando nesses placares.",
+                )
+                if hit_rate > 0:
+                    st.caption(
+                        "A fonte de dados não traz odds reais de placar exato, "
+                        "então aqui não há simulação de lucro — apenas o "
+                        "requisito: para lucrar, o mercado precisaria pagar "
+                        f"odds médias acima de {1 / hit_rate:.1f} nesses "
+                        "placares."
+                    )
+                st.caption(
+                    "Contexto importante: mercados de placar exato embutem "
+                    "margens muito maiores que o 1X2 (frequentemente 20–35% "
+                    "contra ~5%). Placares comuns como 1-0 e 1-1 costumam "
+                    "pagar entre 5.5 e 8.0 — compare com a odd de equilíbrio "
+                    "acima para julgar a viabilidade. Amostras pequenas de "
+                    "placar exato variam MUITO: 100+ jogos antes de qualquer "
+                    "conclusão."
+                )
             st.caption(
                 "Referência: chutar sempre o favorito dá tipicamente 45–55% de "
                 "acerto 1X2 no Brasileirão; placar exato acima de ~10% já é bom."

@@ -155,10 +155,10 @@ def reconcile_names(
 
 # -------------------------------------------------------------------- odds
 def _extract_odds(raw: pd.DataFrame) -> pd.DataFrame:
-    """Extrai odds 1X2 de fechamento com ordem de preferência:
-    Pinnacle (PSC*) > média do mercado (AvgC*) > Bet365 (B365C*) >
-    versões de abertura (PS*/B365*). Linhas sem nenhuma fonte ficam NaN —
-    o backtest simplesmente as ignora na comparação com o mercado."""
+    """Extrai odds de fechamento (1X2 e over/under 2.5) com ordem de
+    preferência: Pinnacle (PSC*) > média do mercado (AvgC*) > Bet365
+    (B365C*) > versões de abertura. Linhas sem fonte ficam NaN — o backtest
+    simplesmente as ignora na comparação com o mercado."""
     priorities = [
         ("PSCH", "PSCD", "PSCA"),
         ("AvgCH", "AvgCD", "AvgCA"),
@@ -175,7 +175,26 @@ def _extract_odds(raw: pd.DataFrame) -> pd.DataFrame:
             oh = oh.fillna(pd.to_numeric(raw[h], errors="coerce"))
             od = od.fillna(pd.to_numeric(raw[d], errors="coerce"))
             oa = oa.fillna(pd.to_numeric(raw[a], errors="coerce"))
-    return pd.DataFrame({"odds_home": oh, "odds_draw": od, "odds_away": oa})
+
+    # over/under 2.5 — nomes na football-data.co.uk usam ">2.5"/"<2.5"
+    ou_priorities = [
+        ("AvgC>2.5", "AvgC<2.5"),
+        ("B365C>2.5", "B365C<2.5"),
+        ("P>2.5", "P<2.5"),
+        ("Avg>2.5", "Avg<2.5"),
+        ("B365>2.5", "B365<2.5"),
+    ]
+    over = pd.Series(pd.NA, index=raw.index, dtype="Float64")
+    under = over.copy()
+    for o, u in ou_priorities:
+        if {o, u}.issubset(raw.columns):
+            over = over.fillna(pd.to_numeric(raw[o], errors="coerce"))
+            under = under.fillna(pd.to_numeric(raw[u], errors="coerce"))
+
+    return pd.DataFrame({
+        "odds_home": oh, "odds_draw": od, "odds_away": oa,
+        "odds_over25": over, "odds_under25": under,
+    })
 
 
 # --------------------------------------------------------------- Brasileirão
