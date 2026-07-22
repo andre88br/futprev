@@ -25,12 +25,26 @@ FOOTBALL_DATA_API_KEY = "sua_chave_aqui"
 ```
 
 ## Arquivos
-- `data.py`  — cliente da football-data.org (fixtures + histórico)
-- `model.py` — modelo de Poisson (treino + previsão). Rode `python model.py` para o autoteste.
-- `app.py`   — interface Streamlit
+- `data.py`       — cliente da football-data.org (fixtures + jogos da temporada atual)
+- `historical.py` — enriquece o treino com histórico de temporadas anteriores (Brasileirão via
+  GitHub, ligas europeias via football-data.co.uk) e reconcilia nomes de times entre fontes
+- `model.py`      — modelo de Poisson (treino + previsão). Rode `python model.py` para o autoteste.
+- `validate.py`   — backtest cronológico (Brier score / log-loss) contra uma baseline ingênua.
+  Rode `python validate.py` para gerar `validation_report_bsa.json`
+- `app.py`        — interface Streamlit (mostra o relatório de validação num expander)
+
+## Validação
+`validate.py` roda um backtest cronológico (Brier score / log-loss) contra uma baseline
+ingênua, usando o próprio histórico do Brasileirão. Como o ambiente deste projeto acessa
+`football-data.co.uk` pela internet normal (bloqueada apenas no meu sandbox de desenvolvimento),
+gere o relatório rodando localmente ou já no Streamlit Cloud:
+```bash
+python validate.py   # gera validation_report_bsa.json
+```
+O `app.py` exibe esse relatório automaticamente no expander "Sobre os dados" assim que o
+arquivo existir — sem ele, essa seção simplesmente não aparece.
 
 ## Próximos passos
 - Dixon-Coles completo (correção de placares baixos via parâmetro rho)
-- Suplementar treino com temporadas anteriores (CSVs da football-data.co.uk)
 - Comparar probabilidades do modelo com odds de mercado (valor de aposta)
-- Métricas de calibração (Brier score, log-loss) para validar o modelo
+- Ampliar reconciliação de nomes para as ligas europeias (hoje só testada a fundo no Brasileirão)

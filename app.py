@@ -11,12 +11,14 @@ Rodar:  streamlit run app.py
 Chave:  defina FOOTBALL_DATA_API_KEY no ambiente ou em .streamlit/secrets.toml
 """
 
+import json
 import os
 import pandas as pd
 import streamlit as st
 
 from data import FootballData, FREE_COMPETITIONS
 from model import PoissonGoalsModel
+from historical import build_training_data
 
 st.set_page_config(page_title="Previsão de Futebol", page_icon="⚽", layout="wide")
 
@@ -38,15 +40,29 @@ def load_fixtures(api_key: str, code: str, n_rounds: int) -> pd.DataFrame:
     return client(api_key).upcoming_fixtures(code, n_rounds=n_rounds)
 
 
-@st.cache_data(ttl=1800, show_spinner="Carregando histórico da temporada...")
-def load_history(api_key: str, code: str) -> pd.DataFrame:
+@st.cache_data(ttl=1800, show_spinner="Carregando jogos da temporada atual...")
+def load_current_season(api_key: str, code: str) -> pd.DataFrame:
     return client(api_key).finished_matches(code)
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner="Enriquecendo com histórico de temporadas anteriores...")
+def load_training_data(api_key: str, code: str) -> tuple[pd.DataFrame, dict]:
+    current = load_current_season(api_key, code)
+    return build_training_data(code, current)
 
 
 @st.cache_resource(show_spinner="Treinando modelo...")
 def train_model(api_key: str, code: str, half_life: float) -> PoissonGoalsModel:
-    hist = load_history(api_key, code)
-    return PoissonGoalsModel(half_life_days=half_life).fit(hist)
+    combined, _ = load_training_data(api_key, code)
+    return PoissonGoalsModel(half_life_days=half_life).fit(combined)
+
+
+def load_validation_report(code: str) -> dict | None:
+    path = {"BSA": "validation_report_bsa.json"}.get(code)
+    if path and os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return None
 
 
 def pct(x: float) -> str:
@@ -79,10 +95,10 @@ with st.sidebar:
         help="Menor = dá mais peso à forma recente dos times.",
     )
 
-# ---- carrega jogos e histórico
+# ---- carrega jogos e histórico (temporada atual + enriquecimento externo)
 try:
     fixtures = load_fixtures(api_key, code, n_rounds)
-    history = load_history(api_key, code)
+    training_data, hist_info = load_training_data(api_key, code)
 except Exception as e:
     st.error(f"Erro ao consultar a API: {e}")
     st.stop()
@@ -91,11 +107,43 @@ if fixtures.empty:
     st.warning("Nenhum jogo agendado encontrado para as próximas rodadas.")
     st.stop()
 
-if len(history) < 30:
-    st.info(
-        f"Só há {len(history)} jogos finalizados nesta temporada. "
-        "As previsões ficam mais confiáveis conforme o campeonato avança."
+with st.expander("ℹ️ Sobre os dados e a confiabilidade do modelo"):
+    st.markdown(
+        f"- **Jogos usados no treino:** {len(training_data)} "
+        f"(temporada atual + histórico externo)\n"
+        f"- **Fonte do histórico:** {hist_info['source'] or 'nenhuma disponível para esta competição'}\n"
+        f"- **Jogos históricos incorporados:** {hist_info['historical_matches']}"
     )
+    if hist_info["unmatched_teams"]:
+        st.caption(
+            "Times do histórico sem correspondência confirmada na temporada atual "
+            "(não usados como mandante/visitante, mas ainda contam como adversário): "
+            + ", ".join(hist_info["unmatched_teams"])
+        )
+    if hist_info["source"] is None and len(training_data) < 30:
+        st.warning(
+            f"Só há {len(training_data)} jogos disponíveis para esta competição "
+            "e não há fonte de histórico externo para ela ainda. As previsões "
+            "ficam mais confiáveis conforme mais jogos forem disputados."
+        )
+    report = load_validation_report(code)
+    if report:
+        m, b = report["model"], report["baseline_naive"]
+        st.markdown(
+            f"**Validação (backtest {report['period_test'][0]} a {report['period_test'][1]}, "
+            f"{report['n_test_used']} jogos-teste nunca vistos no treino):**\n\n"
+            f"| Métrica | Modelo | Linha de base ingênua |\n"
+            f"|---|---|---|\n"
+            f"| Brier score (1X2, menor=melhor) | {m['brier_score']:.3f} | {b['brier_score']:.3f} |\n"
+            f"| Log-loss (menor=melhor) | {m['log_loss']:.3f} | {b['log_loss']:.3f} |\n"
+        )
+        st.caption(
+            "A linha de base ingênua usa sempre a frequência histórica de "
+            "vitória-mandante/empate/vitória-visitante, sem olhar quem está jogando. "
+            "O modelo bate a linha de base, mas por margem modesta — típico em "
+            "previsão de futebol, onde o resultado tem bastante aleatoriedade "
+            "mesmo com um bom modelo."
+        )
 
 # ---- lista de jogos por rodada -> seleção
 st.subheader("Escolha um jogo")
