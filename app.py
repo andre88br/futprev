@@ -394,13 +394,48 @@ with tab_perf:
                 show[c] = show[c].map(pct)
             show["✓ 1X2"] = show["hit_1x2"].map({True: "✅", False: "❌"})
             show["✓ Placar"] = show["hit_exact_score"].map({True: "✅", False: "❌"})
+            show["Odd"] = perf["odd_pick"].map(
+                lambda v: f"{v:.2f}" if pd.notna(v) else "—")
+            show["Lucro"] = perf["profit"].map(
+                lambda v: f"{v:+.2f}" if pd.notna(v) else "—")
             show = show[["matchday", "match", "prob_home", "prob_draw",
                          "prob_away", "pick", "actual", "predicted_score",
-                         "actual_score", "✓ 1X2", "✓ Placar"]]
+                         "actual_score", "✓ 1X2", "✓ Placar", "Odd", "Lucro"]]
             show.columns = ["Rodada", "Jogo", "P(1)", "P(X)", "P(2)",
                             "Palpite", "Real", "Placar prev.", "Placar real",
-                            "✓ 1X2", "✓ Placar"]
+                            "✓ 1X2", "✓ Placar", "Odd", "Lucro"]
             st.dataframe(show, hide_index=True, use_container_width=True)
+
+            # ---- simulação de banca (só jogos com odds de fechamento)
+            bets = perf.dropna(subset=["profit"])
+            if len(bets) >= 5:
+                st.markdown("**💰 Simulação de banca** — 1 unidade no palpite "
+                            "do modelo, paga à odd real de fechamento")
+                total = bets["profit"].sum()
+                roi = total / len(bets)
+                odd_media = bets["odd_pick"].mean()
+                b1, b2, b3, b4 = st.columns(4)
+                b1.metric("Apostas", len(bets))
+                b2.metric("Odd média", f"{odd_media:.2f}")
+                b3.metric("Lucro total", f"{total:+.2f} un")
+                b4.metric("ROI", f"{100 * roi:+.1f}%")
+                cum = bets.sort_values("date")["profit"].cumsum().reset_index(drop=True)
+                cum.index = cum.index + 1
+                st.line_chart(cum, height=220)
+                st.caption(
+                    f"Odds de fechamento reais (margem da casa incluída — é o "
+                    f"que se receberia de fato). Amostra de {len(bets)} apostas "
+                    "é PEQUENA: resultados aqui são ilustrativos, não evidência "
+                    "de vantagem. Antes de concluir qualquer coisa, acumule "
+                    "100+ jogos — e lembre que o backtest mostra o mercado "
+                    "estimando probabilidades melhor que o modelo."
+                )
+            elif bets.empty:
+                st.caption(
+                    "Sem odds de fechamento disponíveis para estes jogos "
+                    "(a fonte de odds pode ainda não ter atualizado as "
+                    "rodadas mais recentes)."
+                )
             st.caption(
                 "Referência: chutar sempre o favorito dá tipicamente 45–55% de "
                 "acerto 1X2 no Brasileirão; placar exato acima de ~10% já é bom."

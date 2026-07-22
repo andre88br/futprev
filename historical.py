@@ -308,4 +308,37 @@ def build_training_data(
 
     combined = pd.concat([hist, current_season_matches], ignore_index=True, sort=False)
     combined = combined.dropna(subset=["home_team", "away_team", "home_goals", "away_goals"])
+    combined = _dedup_matches(combined)
     return combined, info
+
+
+def _dedup_matches(df: pd.DataFrame, tolerance_days: int = 3) -> pd.DataFrame:
+    """Remove jogos duplicados entre fontes (o mesmo jogo pode vir da API e
+    do histórico externo, às vezes com 1 dia de diferença por fuso horário).
+    Dois registros do mesmo par mandante-visitante a <= tolerance_days de
+    distância são o mesmo jogo. Preferimos manter a linha COM odds (vinda
+    do histórico externo), que carrega mais informação."""
+    if df.empty or "date" not in df.columns:
+        return df
+    df = df.copy()
+    df["_d"] = pd.to_datetime(df["date"], utc=True).dt.tz_localize(None)
+    has_odds = (
+        df["odds_home"].notna() if "odds_home" in df.columns
+        else pd.Series(False, index=df.index)
+    )
+    df["_has_odds"] = has_odds
+    # com odds primeiro: em caso de duplicata, a linha mantida é a com odds
+    df = df.sort_values(["_has_odds"], ascending=False)
+
+    kept_idx = []
+    kept_dates: dict[tuple, list] = {}
+    for idx, row in df.iterrows():
+        key = (row["home_team"], row["away_team"])
+        dates = kept_dates.setdefault(key, [])
+        d = row["_d"]
+        if any(abs((d - k).days) <= tolerance_days for k in dates):
+            continue  # duplicata de um jogo já mantido
+        dates.append(d)
+        kept_idx.append(idx)
+    out = df.loc[kept_idx].drop(columns=["_d", "_has_odds"])
+    return out.sort_values("date").reset_index(drop=True)
