@@ -98,6 +98,7 @@ class FootballData:
                 continue
             rows.append({
                 "date": m["utcDate"],
+                "matchday": m.get("matchday"),
                 "home_team": m["homeTeam"]["name"],
                 "away_team": m["awayTeam"]["name"],
                 "home_goals": ft["home"],

@@ -12,13 +12,15 @@ Chave:  defina FOOTBALL_DATA_API_KEY no ambiente ou em .streamlit/secrets.toml
 """
 
 import os
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from data import FootballData, FREE_COMPETITIONS
 from model import PoissonGoalsModel, DixonColesModel
 from historical import build_training_data
-from validate import backtest_1x2
+from validate import backtest_1x2, walk_forward_recent
 
 st.set_page_config(page_title="Previsão de Futebol", page_icon="⚽", layout="wide")
 
@@ -76,6 +78,19 @@ def compute_validation_report(training_data: pd.DataFrame, half_life: float,
         )
     except Exception:
         return None
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner="Reconstruindo previsões das últimas rodadas...")
+def compute_recent_performance(training_data: pd.DataFrame, current_season: pd.DataFrame,
+                               half_life: float, model_name: str,
+                               n_matchdays: int) -> pd.DataFrame:
+    try:
+        return walk_forward_recent(
+            training_data, current_season, n_matchdays=n_matchdays,
+            half_life_days=half_life, model_class=MODEL_CLASSES[model_name],
+        )
+    except Exception:
+        return pd.DataFrame()
 
 
 def pct(x: float) -> str:
@@ -187,6 +202,28 @@ with st.expander("ℹ️ Sobre os dados e a confiabilidade do modelo"):
                     "dele de forma consistente é raríssimo — se acontecer aqui, "
                     "desconfie de bug antes de comemorar."
                 )
+            calib = report.get("calibration")
+            if calib:
+                st.markdown("**Calibração** — quando o modelo diz X%, acontece X%?")
+                fig, ax = plt.subplots(figsize=(4, 4))
+                xs = [c["pred_mean"] for c in calib]
+                ys = [c["obs_freq"] for c in calib]
+                ns = [c["n"] for c in calib]
+                ax.plot([0, 1], [0, 1], "--", color="gray", lw=1,
+                        label="calibração perfeita")
+                ax.scatter(xs, ys, s=[max(20, n / 5) for n in ns], alpha=0.8)
+                ax.set_xlabel("Probabilidade prevista")
+                ax.set_ylabel("Frequência observada")
+                ax.set_xlim(0, 1)
+                ax.set_ylim(0, 1)
+                ax.legend(fontsize=8)
+                st.pyplot(fig, use_container_width=False)
+                plt.close(fig)
+                st.caption(
+                    "Cada ponto agrupa os palpites numa faixa de probabilidade "
+                    "(tamanho = quantidade). Pontos acima da linha: o modelo foi "
+                    "pessimista nessa faixa; abaixo: superconfiante."
+                )
 
 # ---- lista de jogos por rodada -> seleção
 st.subheader("Escolha um jogo")
@@ -204,7 +241,17 @@ selected = fixtures[fixtures["match_id"] == keys[choice]].iloc[0]
 # ---- previsão
 st.divider()
 home, away = selected["home_team"], selected["away_team"]
-st.subheader(f"{home}  ×  {away}")
+ch, cx, ca = st.columns([2, 1, 2])
+with ch:
+    if selected.get("home_crest"):
+        st.image(selected["home_crest"], width=56)
+    st.markdown(f"**{home}**")
+with cx:
+    st.markdown("### ×")
+with ca:
+    if selected.get("away_crest"):
+        st.image(selected["away_crest"], width=56)
+    st.markdown(f"**{away}**")
 
 try:
     model = train_model(api_key, code, half_life, model_name)
@@ -242,3 +289,61 @@ st.markdown("**Placares mais prováveis**")
 top = pd.DataFrame(pred["top_scorelines"], columns=["Placar", "Probabilidade"])
 top["Probabilidade"] = top["Probabilidade"].map(pct)
 st.dataframe(top, hide_index=True, use_container_width=False)
+
+# ---- heatmap da matriz de placares (até 5 gols por lado — quase toda a massa)
+with st.expander("🔥 Mapa de calor de todos os placares"):
+    m = model.score_matrix(home, away)[:6, :6]
+    fig, ax = plt.subplots(figsize=(5, 4.2))
+    im = ax.imshow(m, cmap="YlOrRd")
+    ax.set_xticks(range(6)); ax.set_yticks(range(6))
+    ax.set_xlabel(f"Gols — {away}")
+    ax.set_ylabel(f"Gols — {home}")
+    for i in range(6):
+        for j in range(6):
+            ax.text(j, i, f"{100 * m[i, j]:.1f}", ha="center", va="center",
+                    fontsize=7, color="black")
+    fig.colorbar(im, ax=ax, shrink=0.8, label="Probabilidade")
+    st.pyplot(fig, use_container_width=False)
+    plt.close(fig)
+
+# ---- desempenho recente (walk-forward nas últimas rodadas finalizadas)
+st.divider()
+with st.expander("📊 Desempenho do modelo nas últimas rodadas"):
+    st.caption(
+        "Para cada rodada já finalizada, o modelo é treinado APENAS com jogos "
+        "anteriores a ela e prevê os jogos daquela rodada — o que ele teria "
+        "dito antes de a bola rolar, sem trapaça."
+    )
+    n_mds = st.slider("Rodadas a avaliar", 3, 10, 5)
+    if st.button("Calcular desempenho recente"):
+        current = load_current_season(api_key, code)
+        perf = compute_recent_performance(training_data, current, half_life,
+                                          model_name, n_mds)
+        if perf.empty:
+            st.info(
+                "Ainda não há rodadas finalizadas suficientes nesta temporada "
+                "para reconstruir previsões."
+            )
+        else:
+            acc = perf["hit_1x2"].mean()
+            acc_score = perf["hit_exact_score"].mean()
+            avg_brier = perf["brier"].mean()
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Acerto do palpite 1X2", pct(acc))
+            k2.metric("Acerto do placar exato", pct(acc_score))
+            k3.metric("Brier médio", f"{avg_brier:.3f}")
+            show = perf.copy()
+            for c in ("prob_home", "prob_draw", "prob_away"):
+                show[c] = show[c].map(pct)
+            show["✓ 1X2"] = show["hit_1x2"].map({True: "✅", False: "❌"})
+            show = show[["matchday", "match", "prob_home", "prob_draw",
+                         "prob_away", "pick", "actual", "predicted_score",
+                         "actual_score", "✓ 1X2"]]
+            show.columns = ["Rodada", "Jogo", "P(1)", "P(X)", "P(2)",
+                            "Palpite", "Real", "Placar prev.", "Placar real",
+                            "✓ 1X2"]
+            st.dataframe(show, hide_index=True, use_container_width=True)
+            st.caption(
+                "Referência: chutar sempre o favorito dá tipicamente 45–55% de "
+                "acerto 1X2 no Brasileirão; placar exato acima de ~10% já é bom."
+            )
