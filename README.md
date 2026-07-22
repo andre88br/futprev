@@ -34,15 +34,16 @@ FOOTBALL_DATA_API_KEY = "sua_chave_aqui"
 - `app.py`        — interface Streamlit (mostra o relatório de validação num expander)
 
 ## Validação
-`validate.py` roda um backtest cronológico (Brier score / log-loss) contra uma baseline
-ingênua, usando o próprio histórico do Brasileirão. Como o ambiente deste projeto acessa
-`football-data.co.uk` pela internet normal (bloqueada apenas no meu sandbox de desenvolvimento),
-gere o relatório rodando localmente ou já no Streamlit Cloud:
+No app, o botão **"Calcular validação (backtest)"** (barra lateral) roda um backtest
+cronológico nos dados já carregados: treina nos jogos mais antigos, testa nos mais recentes
+(nunca vistos no treino), e compara Brier score / log-loss do modelo contra uma baseline
+ingênua (frequência histórica de vitória-mandante/empate/vitória-visitante). O resultado fica
+em cache por 24h por competição, já que é um cálculo mais pesado.
+
+Para rodar o mesmo backtest fora do app (linha de comando):
 ```bash
-python validate.py   # gera validation_report_bsa.json
+python validate.py   # imprime o relatório e salva validation_report_bsa.json
 ```
-O `app.py` exibe esse relatório automaticamente no expander "Sobre os dados" assim que o
-arquivo existir — sem ele, essa seção simplesmente não aparece.
 
 ## Próximos passos
 - Dixon-Coles completo (correção de placares baixos via parâmetro rho)

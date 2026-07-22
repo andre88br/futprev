@@ -11,7 +11,6 @@ Rodar:  streamlit run app.py
 Chave:  defina FOOTBALL_DATA_API_KEY no ambiente ou em .streamlit/secrets.toml
 """
 
-import json
 import os
 import pandas as pd
 import streamlit as st
@@ -19,6 +18,7 @@ import streamlit as st
 from data import FootballData, FREE_COMPETITIONS
 from model import PoissonGoalsModel
 from historical import build_training_data
+from validate import backtest_1x2
 
 st.set_page_config(page_title="Previsão de Futebol", page_icon="⚽", layout="wide")
 
@@ -57,12 +57,14 @@ def train_model(api_key: str, code: str, half_life: float) -> PoissonGoalsModel:
     return PoissonGoalsModel(half_life_days=half_life).fit(combined)
 
 
-def load_validation_report(code: str) -> dict | None:
-    path = {"BSA": "validation_report_bsa.json"}.get(code)
-    if path and os.path.exists(path):
-        with open(path) as f:
-            return json.load(f)
-    return None
+@st.cache_data(ttl=24 * 3600, show_spinner="Calculando validação (backtest)...")
+def compute_validation_report(training_data: pd.DataFrame, half_life: float) -> dict | None:
+    if training_data.empty or training_data["date"].isna().all():
+        return None
+    try:
+        return backtest_1x2(training_data, test_fraction=0.2, half_life_days=half_life)
+    except Exception:
+        return None
 
 
 def pct(x: float) -> str:
@@ -126,24 +128,30 @@ with st.expander("ℹ️ Sobre os dados e a confiabilidade do modelo"):
             "e não há fonte de histórico externo para ela ainda. As previsões "
             "ficam mais confiáveis conforme mais jogos forem disputados."
         )
-    report = load_validation_report(code)
-    if report:
-        m, b = report["model"], report["baseline_naive"]
-        st.markdown(
-            f"**Validação (backtest {report['period_test'][0]} a {report['period_test'][1]}, "
-            f"{report['n_test_used']} jogos-teste nunca vistos no treino):**\n\n"
-            f"| Métrica | Modelo | Linha de base ingênua |\n"
-            f"|---|---|---|\n"
-            f"| Brier score (1X2, menor=melhor) | {m['brier_score']:.3f} | {b['brier_score']:.3f} |\n"
-            f"| Log-loss (menor=melhor) | {m['log_loss']:.3f} | {b['log_loss']:.3f} |\n"
-        )
-        st.caption(
-            "A linha de base ingênua usa sempre a frequência histórica de "
-            "vitória-mandante/empate/vitória-visitante, sem olhar quem está jogando. "
-            "O modelo bate a linha de base, mas por margem modesta — típico em "
-            "previsão de futebol, onde o resultado tem bastante aleatoriedade "
-            "mesmo com um bom modelo."
-        )
+    st.divider()
+    st.markdown("**Validação do modelo**")
+    if st.button("Calcular validação (backtest)", help="Roda um backtest cronológico "
+                 "nos dados já carregados e compara com uma baseline ingênua. "
+                 "Pode levar alguns segundos."):
+        report = compute_validation_report(training_data, half_life)
+        if report is None:
+            st.info("Não foi possível calcular a validação com os dados atuais.")
+        else:
+            m, b = report["model"], report["baseline_naive"]
+            st.markdown(
+                f"Backtest {report['period_test'][0]} a {report['period_test'][1]} "
+                f"({report['n_test_used']} jogos-teste nunca vistos no treino):\n\n"
+                f"| Métrica | Modelo | Linha de base ingênua |\n"
+                f"|---|---|---|\n"
+                f"| Brier score (1X2, menor=melhor) | {m['brier_score']:.3f} | {b['brier_score']:.3f} |\n"
+                f"| Log-loss (menor=melhor) | {m['log_loss']:.3f} | {b['log_loss']:.3f} |\n"
+            )
+            st.caption(
+                "A linha de base ingênua usa sempre a frequência histórica de "
+                "vitória-mandante/empate/vitória-visitante, sem olhar quem está jogando. "
+                "Se o modelo não bater a linha de base por boa margem, complicar o "
+                "modelo (ex. Dixon-Coles) não costuma ajudar muito."
+            )
 
 # ---- lista de jogos por rodada -> seleção
 st.subheader("Escolha um jogo")
