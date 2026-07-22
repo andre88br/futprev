@@ -126,11 +126,37 @@ def reconcile_names(
     return mapping
 
 
+# -------------------------------------------------------------------- odds
+def _extract_odds(raw: pd.DataFrame) -> pd.DataFrame:
+    """Extrai odds 1X2 de fechamento com ordem de preferência:
+    Pinnacle (PSC*) > média do mercado (AvgC*) > Bet365 (B365C*) >
+    versões de abertura (PS*/B365*). Linhas sem nenhuma fonte ficam NaN —
+    o backtest simplesmente as ignora na comparação com o mercado."""
+    priorities = [
+        ("PSCH", "PSCD", "PSCA"),
+        ("AvgCH", "AvgCD", "AvgCA"),
+        ("B365CH", "B365CD", "B365CA"),
+        ("PSH", "PSD", "PSA"),
+        ("AvgH", "AvgD", "AvgA"),
+        ("B365H", "B365D", "B365A"),
+    ]
+    oh = pd.Series(pd.NA, index=raw.index, dtype="Float64")
+    od = oh.copy()
+    oa = oh.copy()
+    for h, d, a in priorities:
+        if {h, d, a}.issubset(raw.columns):
+            oh = oh.fillna(pd.to_numeric(raw[h], errors="coerce"))
+            od = od.fillna(pd.to_numeric(raw[d], errors="coerce"))
+            oa = oa.fillna(pd.to_numeric(raw[a], errors="coerce"))
+    return pd.DataFrame({"odds_home": oh, "odds_draw": od, "odds_away": oa})
+
+
 # --------------------------------------------------------------- Brasileirão
 def load_brasileirao_history(min_year: int = 2018) -> pd.DataFrame:
     """Histórico do Brasileirão Série A (football-data.co.uk, 2012 até a
     rodada mais recente disputada — este arquivo é atualizado continuamente
-    pela fonte, então inclui a temporada em andamento)."""
+    pela fonte, então inclui a temporada em andamento). Inclui odds de
+    fechamento 1X2 quando disponíveis."""
     r = requests.get(BRASILEIRAO_CSV_URL, timeout=30)
     r.raise_for_status()
 
@@ -141,13 +167,15 @@ def load_brasileirao_history(min_year: int = 2018) -> pd.DataFrame:
     raw["date"] = pd.to_datetime(raw["Date"], format="%d/%m/%Y", errors="coerce")
     raw = raw[raw["date"].dt.year >= min_year]
 
-    return pd.DataFrame({
+    out = pd.DataFrame({
         "date": raw["date"],
         "home_team": raw["Home"],
         "away_team": raw["Away"],
         "home_goals": raw["HG"].astype(int),
         "away_goals": raw["AG"].astype(int),
     })
+    return pd.concat([out.reset_index(drop=True),
+                      _extract_odds(raw).reset_index(drop=True)], axis=1)
 
 
 # --------------------------------------------------------- Ligas europeias
@@ -185,13 +213,15 @@ def load_footballdata_couk(fd_code: str, n_seasons: int = 5) -> pd.DataFrame:
             df = df.dropna(subset=["FTHG", "FTAG", "HomeTeam", "AwayTeam"])
             date = pd.to_datetime(df["Date"], format="%d/%m/%Y", errors="coerce")
             date = date.fillna(pd.to_datetime(df["Date"], format="%d/%m/%y", errors="coerce"))
-            frames.append(pd.DataFrame({
+            base = pd.DataFrame({
                 "date": date,
                 "home_team": df["HomeTeam"],
                 "away_team": df["AwayTeam"],
                 "home_goals": df["FTHG"].astype(int),
                 "away_goals": df["FTAG"].astype(int),
-            }))
+            })
+            frames.append(pd.concat([base.reset_index(drop=True),
+                                     _extract_odds(df).reset_index(drop=True)], axis=1))
         except requests.RequestException:
             continue
     if not frames:

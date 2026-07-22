@@ -45,6 +45,15 @@ Para rodar o mesmo backtest fora do app (linha de comando):
 python validate.py   # imprime o relatório e salva validation_report_bsa.json
 ```
 
+### Comparação com o mercado de apostas
+Quando o histórico traz odds de fechamento 1X2 (o CSV da football-data.co.uk traz, com
+prioridade Pinnacle > média do mercado > Bet365), o backtest também avalia o **mercado**
+nas mesmas métricas e no mesmo subconjunto de jogos: converte as odds em probabilidades
+implícitas (1/odd, normalizado para remover a margem da casa) e mede Brier/log-loss.
+As odds de fechamento são o benchmark mais duro que existe — ficar perto delas já é um
+resultado forte; ganhar delas de forma consistente é raríssimo (e mais provavelmente
+indica bug ou vazamento de dados do que genialidade do modelo).
+
 ## Próximos passos
 - Dixon-Coles completo (correção de placares baixos via parâmetro rho)
 - Comparar probabilidades do modelo com odds de mercado (valor de aposta)

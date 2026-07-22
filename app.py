@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from data import FootballData, FREE_COMPETITIONS
-from model import PoissonGoalsModel
+from model import PoissonGoalsModel, DixonColesModel
 from historical import build_training_data
 from validate import backtest_1x2
 
@@ -51,18 +51,29 @@ def load_training_data(api_key: str, code: str) -> tuple[pd.DataFrame, dict]:
     return build_training_data(code, current)
 
 
+MODEL_CLASSES = {
+    "Dixon-Coles (recomendado)": DixonColesModel,
+    "Poisson simples": PoissonGoalsModel,
+}
+
+
 @st.cache_resource(show_spinner="Treinando modelo...")
-def train_model(api_key: str, code: str, half_life: float) -> PoissonGoalsModel:
+def train_model(api_key: str, code: str, half_life: float, model_name: str):
     combined, _ = load_training_data(api_key, code)
-    return PoissonGoalsModel(half_life_days=half_life).fit(combined)
+    cls = MODEL_CLASSES[model_name]
+    return cls(half_life_days=half_life).fit(combined)
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner="Calculando validação (backtest)...")
-def compute_validation_report(training_data: pd.DataFrame, half_life: float) -> dict | None:
+def compute_validation_report(training_data: pd.DataFrame, half_life: float,
+                              model_name: str) -> dict | None:
     if training_data.empty or training_data["date"].isna().all():
         return None
     try:
-        return backtest_1x2(training_data, test_fraction=0.2, half_life_days=half_life)
+        return backtest_1x2(
+            training_data, test_fraction=0.2, half_life_days=half_life,
+            model_class=MODEL_CLASSES[model_name],
+        )
     except Exception:
         return None
 
@@ -92,6 +103,13 @@ with st.sidebar:
         format_func=lambda c: FREE_COMPETITIONS[c],
     )
     n_rounds = st.slider("Rodadas à frente", 1, 3, 3)
+    model_name = st.selectbox(
+        "Modelo",
+        options=list(MODEL_CLASSES),
+        help="Dixon-Coles corrige as probabilidades dos placares baixos "
+             "(0-0, 1-0, 0-1, 1-1), onde o Poisson simples assume "
+             "independência entre os gols dos dois times.",
+    )
     half_life = st.slider(
         "Meia-vida (dias)", 30, 365, 180,
         help="Menor = dá mais peso à forma recente dos times.",
@@ -133,7 +151,7 @@ with st.expander("ℹ️ Sobre os dados e a confiabilidade do modelo"):
     if st.button("Calcular validação (backtest)", help="Roda um backtest cronológico "
                  "nos dados já carregados e compara com uma baseline ingênua. "
                  "Pode levar alguns segundos."):
-        report = compute_validation_report(training_data, half_life)
+        report = compute_validation_report(training_data, half_life, model_name)
         if report is None:
             st.info("Não foi possível calcular a validação com os dados atuais.")
         else:
@@ -152,6 +170,23 @@ with st.expander("ℹ️ Sobre os dados e a confiabilidade do modelo"):
                 "Se o modelo não bater a linha de base por boa margem, complicar o "
                 "modelo (ex. Dixon-Coles) não costuma ajudar muito."
             )
+            vm = report.get("vs_market")
+            if vm:
+                st.markdown(
+                    f"**Contra o mercado de apostas** "
+                    f"({vm['n_matches_with_odds']} jogos-teste com odds de fechamento):\n\n"
+                    f"| Métrica | Modelo | Mercado (odds) |\n"
+                    f"|---|---|---|\n"
+                    f"| Brier score | {vm['model']['brier_score']:.3f} | {vm['market']['brier_score']:.3f} |\n"
+                    f"| Log-loss | {vm['model']['log_loss']:.3f} | {vm['market']['log_loss']:.3f} |\n"
+                )
+                st.caption(
+                    "As odds de fechamento (com a margem da casa removida) são o "
+                    "benchmark mais duro que existe: agregam a informação de todo o "
+                    "mercado. Ficar perto do mercado já é um resultado forte; ganhar "
+                    "dele de forma consistente é raríssimo — se acontecer aqui, "
+                    "desconfie de bug antes de comemorar."
+                )
 
 # ---- lista de jogos por rodada -> seleção
 st.subheader("Escolha um jogo")
@@ -172,7 +207,7 @@ home, away = selected["home_team"], selected["away_team"]
 st.subheader(f"{home}  ×  {away}")
 
 try:
-    model = train_model(api_key, code, half_life)
+    model = train_model(api_key, code, half_life, model_name)
     pred = model.predict(home, away)
 except ValueError as e:
     st.warning(
@@ -180,6 +215,12 @@ except ValueError as e:
         "Isso costuma acontecer com times recém-promovidos no início da temporada."
     )
     st.stop()
+
+if isinstance(model, DixonColesModel):
+    st.caption(
+        f"Correção Dixon-Coles ativa (ρ = {model.rho:.3f}) — ajusta as "
+        f"probabilidades dos placares 0-0, 1-0, 0-1 e 1-1."
+    )
 
 c1, c2, c3 = st.columns(3)
 c1.metric(f"Vitória {home}", pct(pred["prob_home_win"]))
