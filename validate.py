@@ -210,6 +210,32 @@ def walk_forward_recent(
     return pd.DataFrame(rows)
 
 
+def optimize_half_life(
+    matches: pd.DataFrame,
+    model_class=PoissonGoalsModel,
+    candidates: tuple = (60, 120, 180, 270, 365),
+    test_fraction: float = 0.2,
+) -> tuple[float, pd.DataFrame]:
+    """
+    Busca em grade: roda o backtest para cada meia-vida candidata e devolve
+    (melhor_meia_vida, tabela_de_resultados). Critério: menor log-loss no
+    conjunto de teste cronológico — a mesma métrica honesta do backtest,
+    então a escolha não "vaza" informação do futuro.
+    """
+    rows = []
+    for hl in candidates:
+        r = backtest_1x2(matches, test_fraction=test_fraction,
+                         half_life_days=hl, model_class=model_class)
+        rows.append({
+            "half_life_days": hl,
+            "log_loss": r["model"]["log_loss"],
+            "brier_score": r["model"]["brier_score"],
+        })
+    table = pd.DataFrame(rows)
+    best = table.loc[table["log_loss"].idxmin(), "half_life_days"]
+    return float(best), table
+
+
 if __name__ == "__main__":
     print("Carregando histórico do Brasileirão (2015+)...")
     data = load_brasileirao_history(min_year=2015)
