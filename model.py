@@ -50,9 +50,13 @@ class PoissonGoalsModel:
         self.teams = sorted(set(df["home_team"]) | set(df["away_team"]))
 
         # peso temporal: exp(-lambda * dias_atras), com meia-vida configurável
+        # normaliza para UTC "naive": ao combinar fontes (API com fuso + histórico
+        # sem fuso), a coluna pode vir com datetimes tz-aware e tz-naive misturados,
+        # o que quebra em pd.to_datetime sem utc=True.
         if "date" in df.columns and df["date"].notna().any():
-            last = pd.to_datetime(df["date"]).max()
-            age_days = (last - pd.to_datetime(df["date"])).dt.days.clip(lower=0)
+            dates = pd.to_datetime(df["date"], utc=True).dt.tz_localize(None)
+            last = dates.max()
+            age_days = (last - dates).dt.days.clip(lower=0)
             decay = np.log(2) / self.half_life_days
             df["weight"] = np.exp(-decay * age_days)
         else:

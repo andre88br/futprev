@@ -105,5 +105,7 @@ class FootballData:
             })
         df = pd.DataFrame(rows)
         if not df.empty:
-            df["date"] = pd.to_datetime(df["date"])
+            # naive (sem fuso), para casar com o histórico externo ao combinar
+            # as duas fontes em build_training_data()
+            df["date"] = pd.to_datetime(df["date"], utc=True).dt.tz_localize(None)
         return df
