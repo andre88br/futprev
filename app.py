@@ -97,6 +97,42 @@ def pct(x: float) -> str:
     return f"{100 * x:.1f}%"
 
 
+def team_recent_form(df: pd.DataFrame, team: str, n: int = 5) -> pd.DataFrame:
+    """Últimos n jogos de um time (qualquer mando), mais recente primeiro."""
+    mask = (df["home_team"] == team) | (df["away_team"] == team)
+    sub = df[mask].dropna(subset=["date"]).sort_values("date").tail(n)
+    rows = []
+    for _, r in sub.iterrows():
+        is_home = r["home_team"] == team
+        gf = int(r["home_goals"] if is_home else r["away_goals"])
+        ga = int(r["away_goals"] if is_home else r["home_goals"])
+        rows.append({
+            "Data": pd.to_datetime(r["date"]).strftime("%d/%m/%y"),
+            "Adversário": (r["away_team"] if is_home else r["home_team"])
+                          + (" (fora)" if not is_home else " (casa)"),
+            "Placar": f"{gf}-{ga}",
+            "R": "✅ V" if gf > ga else ("➖ E" if gf == ga else "❌ D"),
+        })
+    return pd.DataFrame(rows[::-1])
+
+
+def head_to_head(df: pd.DataFrame, team_a: str, team_b: str, n: int = 10) -> pd.DataFrame:
+    """Últimos n confrontos diretos entre dois times, mais recente primeiro."""
+    mask = ((df["home_team"] == team_a) & (df["away_team"] == team_b)) | \
+           ((df["home_team"] == team_b) & (df["away_team"] == team_a))
+    sub = df[mask].dropna(subset=["date"]).sort_values("date").tail(n)
+    rows = []
+    for _, r in sub.iterrows():
+        rows.append({
+            "Data": pd.to_datetime(r["date"]).strftime("%d/%m/%y"),
+            "Jogo": f'{r["home_team"]} {int(r["home_goals"])} x '
+                    f'{int(r["away_goals"])} {r["away_team"]}',
+            "_hg": int(r["home_goals"]), "_ag": int(r["away_goals"]),
+            "_home": r["home_team"],
+        })
+    return pd.DataFrame(rows[::-1])
+
+
 # ------------------------------------------------------------------------- UI
 st.title("⚽ Previsão de Futebol")
 st.caption("Modelo de Poisson sobre gols — placar provável, 1X2 e over/under.")
@@ -305,6 +341,76 @@ with st.expander("🔥 Mapa de calor de todos os placares"):
     fig.colorbar(im, ax=ax, shrink=0.8, label="Probabilidade")
     st.pyplot(fig, use_container_width=False)
     plt.close(fig)
+
+# ---- confronto direto
+with st.expander("⚔️ Confronto direto"):
+    h2h = head_to_head(training_data, home, away, n=10)
+    if h2h.empty:
+        st.info("Sem confrontos diretos no histórico carregado.")
+    else:
+        wins_home = sum(
+            (r["_hg"] > r["_ag"]) if r["_home"] == home else (r["_ag"] > r["_hg"])
+            for _, r in h2h.iterrows()
+        )
+        draws = sum(r["_hg"] == r["_ag"] for _, r in h2h.iterrows())
+        wins_away = len(h2h) - wins_home - draws
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"Vitórias {home}", wins_home)
+        c2.metric("Empates", draws)
+        c3.metric(f"Vitórias {away}", wins_away)
+        st.dataframe(h2h[["Data", "Jogo"]], hide_index=True,
+                     use_container_width=True)
+        st.caption(
+            f"Últimos {len(h2h)} confrontos no histórico carregado. Nota: o "
+            "modelo NÃO usa confronto direto como variável — isto é contexto "
+            "para a sua leitura, não entrada do modelo."
+        )
+
+# ---- forma recente dos dois times
+with st.expander("📈 Forma recente dos times"):
+    fc1, fc2 = st.columns(2)
+    for col, team in ((fc1, home), (fc2, away)):
+        with col:
+            st.markdown(f"**{team}**")
+            form = team_recent_form(training_data, team, n=5)
+            if form.empty:
+                st.info("Sem jogos no histórico.")
+            else:
+                st.markdown("Sequência: " + " ".join(
+                    r["R"].split()[0] for _, r in form.iterrows()
+                ))
+                st.dataframe(form, hide_index=True, use_container_width=True)
+
+# ---- ranking de forças (só Dixon-Coles, que expõe ataque/defesa por time)
+if isinstance(model, DixonColesModel):
+    with st.expander("💪 Ranking de forças do modelo"):
+        season_teams = set(fixtures["home_team"]) | set(fixtures["away_team"])
+        rows = []
+        for t in model.teams:
+            if t in season_teams:
+                i = model._team_idx[t]
+                rows.append({
+                    "Time": t,
+                    "Ataque": model.attack[i],
+                    "Defesa": model.defense[i],
+                    "Força geral": model.attack[i] + model.defense[i],
+                })
+        if rows:
+            rank = pd.DataFrame(rows).sort_values(
+                "Força geral", ascending=False
+            ).reset_index(drop=True)
+            rank.index = rank.index + 1
+            st.dataframe(
+                rank.style.format({"Ataque": "{:+.2f}", "Defesa": "{:+.2f}",
+                                   "Força geral": "{:+.2f}"}),
+                use_container_width=True,
+            )
+            st.caption(
+                "Coeficientes estimados pelo modelo (escala logarítmica, "
+                "relativos ao time de referência). Ataque maior = marca mais; "
+                "defesa maior = sofre menos. É como o modelo 'enxerga' cada "
+                "time hoje, com peso maior nos jogos recentes."
+            )
 
 # ---- desempenho recente (walk-forward nas últimas rodadas finalizadas)
 st.divider()
