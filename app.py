@@ -336,14 +336,25 @@ with st.expander("📊 Desempenho do modelo nas últimas rodadas"):
             for c in ("prob_home", "prob_draw", "prob_away"):
                 show[c] = show[c].map(pct)
             show["✓ 1X2"] = show["hit_1x2"].map({True: "✅", False: "❌"})
+            show["✓ Placar"] = show["hit_exact_score"].map({True: "✅", False: "❌"})
             show = show[["matchday", "match", "prob_home", "prob_draw",
                          "prob_away", "pick", "actual", "predicted_score",
-                         "actual_score", "✓ 1X2"]]
+                         "actual_score", "✓ 1X2", "✓ Placar"]]
             show.columns = ["Rodada", "Jogo", "P(1)", "P(X)", "P(2)",
                             "Palpite", "Real", "Placar prev.", "Placar real",
-                            "✓ 1X2"]
+                            "✓ 1X2", "✓ Placar"]
             st.dataframe(show, hide_index=True, use_container_width=True)
             st.caption(
                 "Referência: chutar sempre o favorito dá tipicamente 45–55% de "
                 "acerto 1X2 no Brasileirão; placar exato acima de ~10% já é bom."
+            )
+            st.caption(
+                "**Por que o palpite quase nunca é X, mas o placar previsto às "
+                "vezes é empate?** São perguntas diferentes à mesma distribuição: "
+                "o palpite compara 3 resultados agregados (e o empate raramente "
+                "supera 30%, então quase nunca é o favorito — nem nas casas de "
+                "apostas), enquanto o placar previsto compara placares "
+                "individuais — e um único empate como 1-1 concentra mais "
+                "probabilidade do que qualquer placar isolado de vitória, cuja "
+                "massa está espalhada em 1-0, 2-0, 2-1 etc."
             )
